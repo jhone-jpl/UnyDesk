@@ -1,7 +1,7 @@
 # Build UnyDesk Linux client (x64 Flutter + .deb)
 #
-# Trigger: Actions → "Build UnyDesk Linux" → Run workflow
-# Artifacts: unydesk-linux-x64 (bundle) + unydesk-linux-x64.deb
+# Trigger: alone or via "Build UnyDesk Clients"
+# Artifacts: unydesk-linux-x64 (+ optional .deb)
 
 name: Build UnyDesk Linux
 
@@ -20,6 +20,7 @@ env:
   FLUTTER_VERSION: "3.24.5"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   CLIENT_DIR: unydesk-client
+  DEBIAN_FRONTEND: noninteractive
 
 jobs:
   generate-bridge:
@@ -40,9 +41,13 @@ jobs:
           fi
 
       - name: Install prerequisites
+        working-directory: ${{ github.workspace }}
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y clang cmake curl gcc g++ git libclang-dev \
+          set -eux
+          # GHA runners often hold dpkg lock via unattended-upgrades → apt exit 100
+          sudo apt-get -o DPkg::Lock::Timeout=300 update -y
+          sudo apt-get -o DPkg::Lock::Timeout=300 install -y \
+            clang cmake curl gcc g++ git libclang-dev \
             libgtk-3-dev llvm-dev nasm ninja-build pkg-config wget
 
       - name: Install Rust
@@ -73,6 +78,8 @@ jobs:
             --c-output ./flutter/macos/Runner/bridge_generated.h
           cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
           sed -i "s/ffi.NativeFunction<ffi.Bool Function(DartPort/ffi.NativeFunction<ffi.Uint8 Function(DartPort/g" flutter/lib/generated_bridge.dart || true
+          test -f src/bridge_generated.rs
+          test -f flutter/lib/generated_bridge.dart
 
       - name: Upload bridge
         uses: actions/upload-artifact@v4
@@ -85,25 +92,34 @@ jobs:
             ${{ env.CLIENT_DIR }}/flutter/lib/generated_bridge.freezed.dart
             ${{ env.CLIENT_DIR }}/flutter/macos/Runner/bridge_generated.h
             ${{ env.CLIENT_DIR }}/flutter/ios/Runner/bridge_generated.h
+          if-no-files-found: error
 
   build-linux:
     name: Build Linux x64
     needs: [generate-bridge]
     runs-on: ubuntu-22.04
+    timeout-minutes: 360
     defaults:
       run:
         working-directory: ${{ env.CLIENT_DIR }}
     steps:
-      # Checkout MUST be first: defaults.working-directory is unydesk-client.
       - name: Checkout
         uses: actions/checkout@v5
 
       - name: Free disk space
         working-directory: ${{ github.workspace }}
         run: |
+          set -eux
           sudo rm -rf /opt/ghc /usr/local/lib/android /usr/share/dotnet || true
-          sudo apt-get update -y
-          sudo apt-get install -y \
+          df -h
+
+      - name: Install build dependencies
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -eux
+          # Exit code 100 from apt is almost always lock or unmet deps — wait for lock.
+          sudo apt-get -o DPkg::Lock::Timeout=300 update -y
+          sudo apt-get -o DPkg::Lock::Timeout=300 install -y \
             clang cmake curl g++ gcc git nasm ninja-build pkg-config wget \
             libgtk-3-dev libclang-dev llvm-dev \
             libayatana-appindicator3-dev libasound2-dev \
@@ -114,9 +130,9 @@ jobs:
             python3 dpkg-dev
 
       - name: Set swap
-        uses: pierotofy/set-swap-space@master
+        uses: pierotofy/set-swap-space@49819abfb41bd9b44fb781159c033dba90353a7c
         with:
-          swap-size-gb: 8
+          swap-size-gb: 12
 
       - name: Require vendored hbb_common
         run: |
@@ -130,6 +146,12 @@ jobs:
         with:
           name: bridge-artifact-linux
           path: .
+
+      - name: Verify bridge files
+        run: |
+          test -f src/bridge_generated.rs
+          test -f flutter/lib/generated_bridge.dart
+          ls -la src/bridge_generated* flutter/lib/generated_bridge* || true
 
       - name: Restore vcpkg binary cache
         uses: actions/cache@v4
@@ -152,6 +174,12 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
           targets: x86_64-unknown-linux-gnu
           components: rustfmt
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.CLIENT_DIR }} -> target
+          prefix-key: ubuntu-22.04-unydesk
 
       - name: Install Flutter
         uses: subosito/flutter-action@v2
@@ -179,9 +207,9 @@ jobs:
 
       - name: Install vcpkg packages
         run: |
-          # Prefer our static codecs over system opus
-          sudo apt-get remove -y libopus-dev || true
-          if ! $VCPKG_ROOT/vcpkg install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed"; then
+          set -eux
+          sudo apt-get -o DPkg::Lock::Timeout=300 remove -y libopus-dev || true
+          if ! "$VCPKG_ROOT/vcpkg" install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed"; then
             echo "::error::vcpkg install failed — dumping recent logs"
             find "${VCPKG_ROOT}/buildtrees" -name "*.log" 2>/dev/null | tail -n 40 | while read -r f; do
               echo "===== $f ====="
@@ -194,23 +222,26 @@ jobs:
         env:
           VCPKG_ROOT: /opt/vcpkg
         run: |
-          # cdylib only (matches upstream CI)
+          set -eux
           sed -i 's/\["cdylib", "staticlib", "rlib"\]/["cdylib"]/g' Cargo.toml
           python3 ./build.py --flutter --hwcodec
           ls -lah .
-          ls -lah flutter/build/linux/x64/release/bundle/ || true
+          ls -lah flutter/build/linux/x64/release/bundle/
           ls -lah rustdesk-*.deb || true
 
       - name: Prepare bundle artifact
+        working-directory: ${{ github.workspace }}
         run: |
-          mkdir -p ../artifacts/unydesk-linux-x64
-          cp -a flutter/build/linux/x64/release/bundle/. ../artifacts/unydesk-linux-x64/
-          if ls rustdesk-*.deb 1>/dev/null 2>&1; then
-            cp rustdesk-*.deb ../artifacts/
-            for f in ../artifacts/rustdesk-*.deb; do
+          set -eux
+          mkdir -p artifacts/unydesk-linux-x64
+          cp -a unydesk-client/flutter/build/linux/x64/release/bundle/. artifacts/unydesk-linux-x64/
+          if ls unydesk-client/rustdesk-*.deb 1>/dev/null 2>&1; then
+            cp unydesk-client/rustdesk-*.deb artifacts/
+            for f in artifacts/rustdesk-*.deb; do
               mv "$f" "${f/rustdesk-/unydesk-}"
             done
           fi
+          ls -lah artifacts/unydesk-linux-x64 | head
 
       - name: Upload Linux bundle
         uses: actions/upload-artifact@v4
@@ -225,3 +256,11 @@ jobs:
           name: unydesk-linux-x64-deb
           path: artifacts/unydesk-*.deb
           if-no-files-found: warn
+
+      - name: Failure hint
+        if: failure()
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "::error::Linux build failed — open the first red step and copy the last 40 log lines."
+          df -h || true
+          free -m || true

@@ -46,9 +46,11 @@ jobs:
           grep -q 'UnyDesk' libs/hbb_common/src/config.rs
 
       - name: Install prerequisites
+        working-directory: ${{ github.workspace }}
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y clang cmake curl gcc g++ git libclang-dev \
+          set -eux
+          sudo apt-get -o DPkg::Lock::Timeout=300 update -y
+          sudo apt-get -o DPkg::Lock::Timeout=300 install -y clang cmake curl gcc g++ git libclang-dev \
             libgtk-3-dev llvm-dev nasm ninja-build pkg-config wget
 
       - name: Install Rust
@@ -190,6 +192,11 @@ jobs:
           echo "VCPKG_BINARY_SOURCES=clear;files,${CACHE_DIR},readwrite" >> "$GITHUB_ENV"
           echo "Using VCPKG_BINARY_SOURCES=clear;files,${CACHE_DIR},readwrite"
 
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Install LLVM
         uses: KyleMayes/install-llvm-action@v2
         with:
@@ -274,7 +281,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
+          python --version
+          python .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
           if ($LASTEXITCODE -ne 0) { throw "build.py failed with exit $LASTEXITCODE" }
           if (Test-Path .\flutter\build\windows\x64\runner\Release) {
             Move-Item -Force .\flutter\build\windows\x64\runner\Release .\unydesk
@@ -309,3 +317,11 @@ jobs:
           name: unydesk-windows-x64
           path: ${{ env.CLIENT_DIR }}/unydesk
           if-no-files-found: error
+
+      - name: Failure hint
+        if: failure()
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "::error::Windows build failed — open the first red step and copy the last 40 log lines."
+          df -h || true

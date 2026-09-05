@@ -23,7 +23,9 @@ jobs:
   linux:
     name: Linux x64
     uses: ./.github/workflows/build-unydesk-linux.yml
+    secrets: inherit
 
   windows:
     name: Windows x64
     uses: ./.github/workflows/build-unydesk-windows.yml
+    secrets: inherit
