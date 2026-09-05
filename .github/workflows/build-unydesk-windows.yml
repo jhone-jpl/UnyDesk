@@ -1,9 +1,7 @@
 # Build UnyDesk Windows client (x64 Flutter)
 #
 # Trigger: Actions → "Build UnyDesk Windows" → Run workflow
-# Artifact: unydesk-windows-x64 (folder with rustdesk.exe / UnyDesk-branded client)
-#
-# Requires the GitHub repo to contain `unydesk-client/` (this monorepo layout).
+# Artifact: unydesk-windows-x64
 
 name: Build UnyDesk Windows
 
@@ -38,16 +36,14 @@ jobs:
         working-directory: ${{ env.CLIENT_DIR }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Ensure hbb_common
-        working-directory: ${{ env.CLIENT_DIR }}
         run: |
           if [ ! -f libs/hbb_common/src/config.rs ]; then
             rm -rf libs/hbb_common
             git clone --depth 1 https://github.com/rustdesk/hbb_common.git libs/hbb_common
           fi
-          # Drop nested .git so cargo path dep is plain sources
           rm -rf libs/hbb_common/.git
 
       - name: Install prerequisites
@@ -73,7 +69,6 @@ jobs:
         run: |
           cargo install cargo-expand --version ${{ env.CARGO_EXPAND_VERSION }} --locked
           cargo install flutter_rust_bridge_codegen --version ${{ env.FLUTTER_RUST_BRIDGE_VERSION }} --features "uuid" --locked
-          # Match bridge job: extended_text 14 needs newer Dart than 3.22.3
           sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' flutter/pubspec.yaml || true
           cd flutter && flutter pub get
 
@@ -84,7 +79,6 @@ jobs:
             --dart-output ./flutter/lib/generated_bridge.dart \
             --c-output ./flutter/macos/Runner/bridge_generated.h
           cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
-          # ABI tweak used by upstream build.py
           sed -i "s/ffi.NativeFunction<ffi.Bool Function(DartPort/ffi.NativeFunction<ffi.Uint8 Function(DartPort/g" flutter/lib/generated_bridge.dart || true
 
       - name: Upload bridge
@@ -102,27 +96,31 @@ jobs:
   build-topmost-dll:
     name: Build WindowInjection.dll
     runs-on: windows-2022
+    # Privacy-mode helper only — do not block the main client build
+    continue-on-error: true
     steps:
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
       - name: Clone and build RustDeskTempTopMostWindow
-        shell: pwsh
+        shell: cmd
         run: |
           git clone https://github.com/rustdesk-org/RustDeskTempTopMostWindow RustDeskTempTopMostWindow
           cd RustDeskTempTopMostWindow
           git checkout ecd8d6a139eee76845ea66423fb739af450fda90
-          msbuild WindowInjection/WindowInjection.vcxproj `
-            -p:Configuration=Release `
-            -p:Platform=x64 `
-            /p:TargetVersion=Windows10
+          msbuild WindowInjection\WindowInjection.vcxproj -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
 
       - name: Upload DLL
         uses: actions/upload-artifact@v4
         with:
           name: topmostwindow-artifacts-x64
           path: RustDeskTempTopMostWindow/WindowInjection/x64/Release/WindowInjection.dll
+          if-no-files-found: warn
 
   build-windows:
     name: Build Windows x64
     needs: [generate-bridge, build-topmost-dll]
+    if: ${{ always() && needs.generate-bridge.result == 'success' }}
     runs-on: windows-2022
     defaults:
       run:
@@ -136,7 +134,7 @@ jobs:
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Ensure hbb_common
         shell: bash
@@ -151,7 +149,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: bridge-artifact
-          path: ${{ env.CLIENT_DIR }}
+          path: .
 
       - name: Install LLVM
         uses: KyleMayes/install-llvm-action@v2
@@ -172,7 +170,12 @@ jobs:
           flutter precache --windows
           Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
           Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
-          $engine = "C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release"
+          $candidates = @(
+            "C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release",
+            "$env:FLUTTER_ROOT/bin/cache/artifacts/engine/windows-x64-release"
+          )
+          $engine = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $engine) { throw "Flutter windows-x64-release engine dir not found" }
           Move-Item -Force windows-x64-release/* $engine/
 
       - name: Patch Flutter dropdown
@@ -227,6 +230,7 @@ jobs:
           Move-Item -Force .\usbmmidd_v2 .\unydesk\
 
       - name: Download WindowInjection.dll
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: topmostwindow-artifacts-x64
