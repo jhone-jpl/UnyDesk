@@ -23,7 +23,8 @@ env:
   FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
   FLUTTER_VERSION: "3.24.5"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  # x-gha binary cache is broken on current GHA Cache API — use files + actions/cache.
+  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/.vcpkg-cache,readwrite"
   CLIENT_DIR: unydesk-client
 
 jobs:
@@ -100,13 +101,6 @@ jobs:
       run:
         working-directory: ${{ env.CLIENT_DIR }}
     steps:
-      - name: Export GHA vcpkg cache env
-        uses: actions/github-script@v7
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
       - name: Free disk space
         run: |
           sudo rm -rf /opt/ghc /usr/local/lib/android /usr/share/dotnet || true
@@ -143,6 +137,14 @@ jobs:
           name: bridge-artifact-linux
           path: .
 
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: vcpkg-linux-x64-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('unydesk-client/vcpkg.json', 'unydesk-client/res/vcpkg/**') }}
+          restore-keys: |
+            vcpkg-linux-x64-${{ env.VCPKG_COMMIT_ID }}-
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -171,13 +173,23 @@ jobs:
         with:
           vcpkgDirectory: /opt/vcpkg
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
-          doNotCache: false
+          doNotCache: true
 
       - name: Install vcpkg packages
+        env:
+          VCPKG_BINARY_SOURCES: ${{ env.VCPKG_BINARY_SOURCES }}
         run: |
           # Prefer our static codecs over system opus
           sudo apt-get remove -y libopus-dev || true
-          $VCPKG_ROOT/vcpkg install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed"
+          mkdir -p "${GITHUB_WORKSPACE}/.vcpkg-cache"
+          if ! $VCPKG_ROOT/vcpkg install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed"; then
+            echo "::error::vcpkg install failed — dumping recent logs"
+            find "${VCPKG_ROOT}/buildtrees" -name "*.log" 2>/dev/null | tail -n 40 | while read -r f; do
+              echo "===== $f ====="
+              tail -n 80 "$f" || true
+            done
+            exit 1
+          fi
 
       - name: Build UnyDesk (Flutter + deb)
         env:

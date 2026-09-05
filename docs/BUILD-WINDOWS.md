@@ -28,7 +28,7 @@ gh workflow run build-unydesk-windows.yml
 
 ## 3. Baixe o artefato
 
-Quando terminar (~40–90 min na primeira vez por causa do vcpkg):
+Quando terminar (~40–90 min na primeira vez; runs seguintes reusam cache local de vcpkg via `actions/cache`):
 
 **Actions → run → Artifacts → `unydesk-windows-x64`**
 
