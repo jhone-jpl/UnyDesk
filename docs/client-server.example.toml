@@ -1,0 +1,7 @@
+# Example client options for UnyDesk self-hosted stack
+# Place beside the binary as config, or set via UI / --config
+
+custom-rendezvous-server = "REPLACE_WITH_HOST"
+relay-server = "REPLACE_WITH_HOST:21117"
+api-server = "http://REPLACE_WITH_HOST:21114"
+key = "REPLACE_WITH_CONTENT_OF_infra/rustdesk-server/data/id_ed25519.pub"

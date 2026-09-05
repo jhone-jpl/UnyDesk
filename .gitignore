@@ -1,0 +1,35 @@
+# Secrets / local env
+keys/*.key.json
+!**/.gitkeep
+.env
+.env.local
+*.log
+
+# Node
+node_modules/
+unydesk-api/node_modules/
+unydesk-api/dist/
+unydesk-console/node_modules/
+unydesk-console/dist/
+
+# Infra runtime (relay private key + DB)
+infra/rustdesk-server/data/id_ed25519
+infra/rustdesk-server/data/*.sqlite3*
+infra/rustdesk-server/data/.config/
+
+# Client build artifacts
+unydesk-client/target/
+unydesk-client/flutter/build/
+unydesk-client/flutter/.dart_tool/
+unydesk-client/flutter/.packages
+unydesk-client/flutter/pubspec.lock
+unydesk-client/**/*.exe
+unydesk-client/**/*.dll
+unydesk-client/**/*.pdb
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

@@ -1,0 +1,44 @@
+# UnyDesk infra — ID/Relay (open-source rustdesk-server) + Postgres/Redis for proprietary API
+services:
+  hbbs:
+    image: rustdesk/rustdesk-server:latest
+    container_name: unydesk-hbbs
+    command: hbbs -r unydesk-hbbr:21117
+    volumes:
+      - ./rustdesk-server/data:/root
+    network_mode: host
+    restart: unless-stopped
+
+  hbbr:
+    image: rustdesk/rustdesk-server:latest
+    container_name: unydesk-hbbr
+    command: hbbr
+    volumes:
+      - ./rustdesk-server/data:/root
+    network_mode: host
+    restart: unless-stopped
+
+  # Prefer ./scripts/start-infra.sh if `docker compose` plugin is unavailable.
+  postgres:
+    image: postgres:16-alpine
+    container_name: unydesk-postgres
+    environment:
+      POSTGRES_USER: unydesk
+      POSTGRES_PASSWORD: unydesk
+      POSTGRES_DB: unydesk
+    ports:
+      - "5434:5432"
+    volumes:
+      - unydesk_pg:/var/lib/postgresql/data
+      - ../../unydesk-api/sql/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: unydesk-redis
+    ports:
+      - "6381:6379"
+    restart: unless-stopped
+
+volumes:
+  unydesk_pg:

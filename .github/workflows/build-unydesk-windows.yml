@@ -1,0 +1,240 @@
+# Build UnyDesk Windows client (x64 Flutter)
+#
+# Trigger: Actions → "Build UnyDesk Windows" → Run workflow
+# Artifact: unydesk-windows-x64 (folder with rustdesk.exe / UnyDesk-branded client)
+#
+# Requires the GitHub repo to contain `unydesk-client/` (this monorepo layout).
+
+name: Build UnyDesk Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - "unydesk-client/**"
+      - ".github/workflows/build-unydesk-windows.yml"
+
+concurrency:
+  group: unydesk-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_VERSION: "1.75"
+  CARGO_EXPAND_VERSION: "1.0.95"
+  FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
+  FLUTTER_VERSION: "3.24.5"
+  LLVM_VERSION: "15.0.6"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  CLIENT_DIR: unydesk-client
+
+jobs:
+  generate-bridge:
+    name: Generate flutter-rust-bridge
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: ${{ env.CLIENT_DIR }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure hbb_common
+        working-directory: ${{ env.CLIENT_DIR }}
+        run: |
+          if [ ! -f libs/hbb_common/src/config.rs ]; then
+            rm -rf libs/hbb_common
+            git clone --depth 1 https://github.com/rustdesk/hbb_common.git libs/hbb_common
+          fi
+          # Drop nested .git so cargo path dep is plain sources
+          rm -rf libs/hbb_common/.git
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y clang cmake curl gcc g++ git libclang-dev \
+            libgtk-3-dev llvm-dev nasm ninja-build pkg-config wget
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.22.3"
+          cache: true
+
+      - name: Install codegen tools
+        run: |
+          cargo install cargo-expand --version ${{ env.CARGO_EXPAND_VERSION }} --locked
+          cargo install flutter_rust_bridge_codegen --version ${{ env.FLUTTER_RUST_BRIDGE_VERSION }} --features "uuid" --locked
+          # Match bridge job: extended_text 14 needs newer Dart than 3.22.3
+          sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' flutter/pubspec.yaml || true
+          cd flutter && flutter pub get
+
+      - name: Generate bridge
+        run: |
+          ~/.cargo/bin/flutter_rust_bridge_codegen \
+            --rust-input ./src/flutter_ffi.rs \
+            --dart-output ./flutter/lib/generated_bridge.dart \
+            --c-output ./flutter/macos/Runner/bridge_generated.h
+          cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
+          # ABI tweak used by upstream build.py
+          sed -i "s/ffi.NativeFunction<ffi.Bool Function(DartPort/ffi.NativeFunction<ffi.Uint8 Function(DartPort/g" flutter/lib/generated_bridge.dart || true
+
+      - name: Upload bridge
+        uses: actions/upload-artifact@v4
+        with:
+          name: bridge-artifact
+          path: |
+            ${{ env.CLIENT_DIR }}/src/bridge_generated.rs
+            ${{ env.CLIENT_DIR }}/src/bridge_generated.io.rs
+            ${{ env.CLIENT_DIR }}/flutter/lib/generated_bridge.dart
+            ${{ env.CLIENT_DIR }}/flutter/lib/generated_bridge.freezed.dart
+            ${{ env.CLIENT_DIR }}/flutter/macos/Runner/bridge_generated.h
+            ${{ env.CLIENT_DIR }}/flutter/ios/Runner/bridge_generated.h
+
+  build-topmost-dll:
+    name: Build WindowInjection.dll
+    runs-on: windows-2022
+    steps:
+      - name: Clone and build RustDeskTempTopMostWindow
+        shell: pwsh
+        run: |
+          git clone https://github.com/rustdesk-org/RustDeskTempTopMostWindow RustDeskTempTopMostWindow
+          cd RustDeskTempTopMostWindow
+          git checkout ecd8d6a139eee76845ea66423fb739af450fda90
+          msbuild WindowInjection/WindowInjection.vcxproj `
+            -p:Configuration=Release `
+            -p:Platform=x64 `
+            /p:TargetVersion=Windows10
+
+      - name: Upload DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: topmostwindow-artifacts-x64
+          path: RustDeskTempTopMostWindow/WindowInjection/x64/Release/WindowInjection.dll
+
+  build-windows:
+    name: Build Windows x64
+    needs: [generate-bridge, build-topmost-dll]
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: ${{ env.CLIENT_DIR }}
+    steps:
+      - name: Export GHA vcpkg cache env
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Ensure hbb_common
+        shell: bash
+        run: |
+          if [ ! -f libs/hbb_common/src/config.rs ]; then
+            rm -rf libs/hbb_common
+            git clone --depth 1 https://github.com/rustdesk/hbb_common.git libs/hbb_common
+          fi
+          rm -rf libs/hbb_common/.git
+
+      - name: Restore bridge
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: ${{ env.CLIENT_DIR }}
+
+      - name: Install LLVM
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          architecture: x64
+
+      - name: Custom Flutter engine (RustDesk)
+        shell: pwsh
+        run: |
+          flutter doctor -v
+          flutter precache --windows
+          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          $engine = "C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release"
+          Move-Item -Force windows-x64-release/* $engine/
+
+      - name: Patch Flutter dropdown
+        shell: bash
+        run: |
+          patch_file=".github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          if [[ -f "$patch_file" ]]; then
+            cp "$patch_file" "$(dirname "$(dirname "$(which flutter)")")"
+            cd "$(dirname "$(dirname "$(which flutter)")")"
+            git apply flutter_3.24.4_dropdown_menu_enableFilter.diff || true
+          fi
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg packages
+        shell: bash
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        run: |
+          $VCPKG_ROOT/vcpkg install --triplet x64-windows-static --x-install-root="$VCPKG_ROOT/installed"
+
+      - name: Build UnyDesk (Flutter)
+        shell: pwsh
+        run: |
+          python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
+          if (Test-Path .\flutter\build\windows\x64\runner\Release) {
+            Move-Item -Force .\flutter\build\windows\x64\runner\Release .\unydesk
+          } else {
+            Move-Item -Force .\flutter\build\windows\runner\Release .\unydesk
+          }
+
+      - name: Add usbmmidd helper
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
+          Expand-Archive usbmmidd_v2.zip -DestinationPath .
+          Remove-Item -Path usbmmidd_v2\Win32 -Recurse -ErrorAction SilentlyContinue
+          Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe","usbmmidd_v2\deviceinstaller.exe","usbmmidd_v2\usbmmidd.bat" -ErrorAction SilentlyContinue
+          Move-Item -Force .\usbmmidd_v2 .\unydesk\
+
+      - name: Download WindowInjection.dll
+        uses: actions/download-artifact@v4
+        with:
+          name: topmostwindow-artifacts-x64
+          path: ${{ env.CLIENT_DIR }}/unydesk
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unydesk-windows-x64
+          path: ${{ env.CLIENT_DIR }}/unydesk
+          if-no-files-found: error

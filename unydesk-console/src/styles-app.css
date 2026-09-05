@@ -1,0 +1,270 @@
+/* UnyDesk-specific extras on top of Uny Design System shell CSS */
+
+.lock-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--gray-900) 55%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.lock-card {
+  background: var(--cor-superficie);
+  border-radius: var(--raio-lg);
+  box-shadow: var(--sombra-modal);
+  padding: 28px 32px;
+  text-align: center;
+  min-width: 280px;
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+}
+
+.lock-card h2 {
+  margin: 8px 0 0;
+  font-size: 1.15rem;
+}
+
+.lock-card p {
+  margin: 0 0 8px;
+  color: var(--texto-muted);
+}
+
+.app.layout-boxed .pagina {
+  max-width: 1140px;
+  margin-inline: auto;
+  width: 100%;
+}
+
+.campo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--texto-secundario);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.input,
+input.input,
+select.input,
+textarea.input {
+  font: inherit;
+  background: var(--cor-superficie);
+  border: 1px solid var(--cor-borda);
+  color: var(--texto-principal);
+  border-radius: var(--raio-sm);
+  padding: 0.55rem 0.75rem;
+  min-height: 40px;
+}
+
+.input:focus,
+input.input:focus {
+  outline: 2px solid var(--focus-outline, var(--cor-primaria));
+  outline-offset: 1px;
+  border-color: var(--cor-primaria);
+}
+
+.form-row-uny {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  padding: 16px 18px;
+}
+
+.acoes-linha {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.metricas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.card-metrica {
+  background: var(--cor-superficie);
+  border-radius: var(--raio);
+  box-shadow: var(--sombra-card);
+  padding: 18px 20px;
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.card-metrica-icone {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--cor-primaria-tinta);
+  color: var(--cor-primaria);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.card-metrica strong {
+  display: block;
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+  color: var(--texto-heading);
+}
+
+.card-metrica span {
+  color: var(--texto-muted);
+  font-size: 12.5px;
+}
+
+.alerta {
+  padding: 12px 16px;
+  border-radius: var(--raio-sm);
+  margin-bottom: 16px;
+}
+
+.alerta-erro {
+  background: var(--perigo-tinta);
+  color: var(--perigo);
+}
+
+.alerta-ok {
+  background: var(--sucesso-tinta);
+  color: var(--sucesso);
+}
+
+.painel-corpo {
+  padding: 16px 18px;
+}
+
+.painel-corpo pre,
+code.bloco {
+  display: block;
+  background: var(--gray-100);
+  border-radius: var(--raio-sm);
+  padding: 12px;
+  overflow: auto;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12.5px;
+  margin: 8px 0;
+}
+
+html[data-uny-theme='dark'] .painel-corpo pre,
+html[data-uny-theme='dark'] code.bloco {
+  background: var(--gray-200);
+}
+
+/* Garantir que o shell inteiro herde o tema escuro */
+html[data-uny-theme='dark'] .app,
+html[data-uny-theme='dark'] .pagina {
+  background: var(--cor-fundo);
+  color: var(--texto-principal);
+}
+
+html[data-uny-theme='dark'] .topo {
+  color: var(--texto-principal);
+}
+
+html[data-uny-theme='dark'] .topo-icon-btn {
+  color: var(--texto-secundario);
+}
+
+html[data-uny-theme='dark'] .topo-icon-btn:hover {
+  color: var(--texto-principal);
+}
+
+html[data-uny-theme='dark'] .topo-busca-dropdown {
+  background: var(--cor-superficie);
+  border-color: var(--cor-borda);
+}
+
+html[data-uny-theme='dark'] .card-metrica,
+html[data-uny-theme='dark'] .painel {
+  background: var(--cor-superficie);
+}
+
+html[data-uny-theme='dark'] .login-page {
+  background:
+    radial-gradient(
+      900px 420px at 15% 0%,
+      color-mix(in srgb, var(--login-brand-bg, var(--cor-primaria)) 22%, transparent),
+      transparent 60%
+    ),
+    var(--cor-fundo);
+}
+
+.tabela-vazia {
+  text-align: center;
+  color: var(--texto-muted);
+  padding: 28px 18px !important;
+}
+
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(900px 420px at 15% 0%, color-mix(in srgb, var(--login-brand-bg, var(--cor-primaria)) 18%, transparent), transparent 60%),
+    var(--cor-fundo);
+}
+
+.login-card {
+  width: min(400px, 100%);
+  background: var(--cor-superficie);
+  border-radius: var(--raio-lg);
+  box-shadow: var(--sombra-card);
+  padding: 28px 26px;
+}
+
+.login-card .marca {
+  border: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+.login-card form {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.login-card .btn-primario {
+  width: 100%;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+@media (max-width: 1100px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    transform: translateX(-105%);
+    transition: transform 0.2s ease;
+  }
+
+  .app.sidebar-mobile-aberta .sidebar {
+    transform: translateX(0);
+    width: var(--sidebar-width);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .app.sidebar-mobile-aberta .sidebar-overlay {
+    display: block;
+  }
+
+  .app.sidebar-oculto .sidebar {
+    width: var(--sidebar-width);
+  }
+}

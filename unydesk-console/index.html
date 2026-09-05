@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UnyDesk Console</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      (function () {
+        try {
+          var STORAGE_KEY = 'uny-theme-settings';
+          var DEFAULTS = {
+            theme: 'light',
+            sidebar: 'light',
+            accent: 'preset-11',
+            caption: true,
+            rtl: false,
+            boxed: false,
+          };
+          var PRESETS = {
+            'preset-1': { hex: '#1F5C52', hover: '#164B42', tinta: '#E4F1EE' },
+            'preset-2': { hex: '#04A9F5', hover: '#0387C4', tinta: '#E6F6FE' },
+            'preset-3': { hex: '#6610F2', hover: '#520DC2', tinta: '#F0E7FE' },
+            'preset-4': { hex: '#673AB7', hover: '#532E92', tinta: '#F0EBF8' },
+            'preset-5': { hex: '#E83E8C', hover: '#C9186E', tinta: '#FCE8F2' },
+            'preset-6': { hex: '#F44236', hover: '#D32F2F', tinta: '#FDECEA' },
+            'preset-7': { hex: '#FD7E14', hover: '#E56B00', tinta: '#FFF1E6' },
+            'preset-8': { hex: '#F4C22B', hover: '#D4A017', tinta: '#FFF8E1' },
+            'preset-9': { hex: '#1DE9B6', hover: '#00C9A0', tinta: '#E0FBF4' },
+            'preset-10': { hex: '#008080', hover: '#006666', tinta: '#E0F2F2' },
+            'preset-11': { hex: '#185FA5', hover: '#144A82', tinta: '#E8F1FA' },
+            'preset-12': { hex: '#2563EB', hover: '#1D4ED8', tinta: '#DBEAFE' },
+            'preset-13': { hex: '#1E3A5F', hover: '#152A45', tinta: '#E8EEF5' },
+            'preset-14': { hex: '#0C4A6E', hover: '#083A56', tinta: '#E0F2FE' },
+            'preset-15': { hex: '#1D2630', hover: '#131920', tinta: '#E8EAEC' },
+            'preset-16': { hex: '#312E81', hover: '#1E1B4B', tinta: '#E0E7FF' },
+          };
+          var raw = localStorage.getItem(STORAGE_KEY);
+          var s = Object.assign({}, DEFAULTS);
+          if (raw) {
+            try {
+              s = Object.assign({}, DEFAULTS, JSON.parse(raw));
+            } catch (e) {}
+          }
+          if (!PRESETS[s.accent]) s.accent = DEFAULTS.accent;
+          var root = document.documentElement;
+          var resolved =
+            s.theme === 'dark' || s.theme === 'light'
+              ? s.theme
+              : window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light';
+          root.setAttribute('data-uny-theme', resolved);
+          root.setAttribute('data-tema', resolved === 'dark' ? 'escuro' : 'claro');
+          root.setAttribute('data-uny-theme-pref', s.theme);
+          root.setAttribute('data-uny-sidebar', s.sidebar);
+          root.setAttribute('data-uny-accent', s.accent);
+          root.setAttribute('data-uny-caption', s.caption ? 'true' : 'false');
+          root.setAttribute('data-uny-width', s.boxed ? 'boxed' : 'full');
+          root.setAttribute('dir', s.rtl ? 'rtl' : 'ltr');
+          var a = PRESETS[s.accent];
+          root.style.setProperty('--cor-primaria', a.hex);
+          root.style.setProperty('--cor-primaria-hover', a.hover);
+          root.style.setProperty('--cor-primaria-tinta', a.tinta);
+          root.style.setProperty('--action-primary', a.hex);
+          root.style.setProperty('--action-primary-hover', a.hover);
+          root.style.setProperty('--focus-outline', a.hex);
+          root.style.setProperty('--shell-nav-active-bg', a.hex);
+          root.style.setProperty('--login-brand-bg', a.hex);
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
