@@ -8,6 +8,11 @@ name: Build UnyDesk Clients
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-unydesk-clients.yml"
+      - "unydesk-client/**"
 
 concurrency:
   group: unydesk-clients-${{ github.ref }}
@@ -77,16 +82,26 @@ jobs:
           test -f src/bridge_generated.rs
           test -f flutter/lib/generated_bridge.dart
 
+      # Flat layout avoids Windows path / monorepo nesting issues on download.
+      - name: Stage bridge artifact
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -eux
+          rm -rf bridge-out
+          mkdir -p bridge-out/src bridge-out/flutter/lib \
+            bridge-out/flutter/macos/Runner bridge-out/flutter/ios/Runner
+          cp unydesk-client/src/bridge_generated.rs bridge-out/src/
+          cp unydesk-client/src/bridge_generated.io.rs bridge-out/src/
+          cp unydesk-client/flutter/lib/generated_bridge.dart bridge-out/flutter/lib/
+          cp unydesk-client/flutter/lib/generated_bridge.freezed.dart bridge-out/flutter/lib/ || true
+          cp unydesk-client/flutter/macos/Runner/bridge_generated.h bridge-out/flutter/macos/Runner/
+          cp unydesk-client/flutter/ios/Runner/bridge_generated.h bridge-out/flutter/ios/Runner/
+          find bridge-out -type f | sort
+
       - uses: actions/upload-artifact@v4
         with:
           name: bridge-artifact
-          path: |
-            ${{ env.CLIENT_DIR }}/src/bridge_generated.rs
-            ${{ env.CLIENT_DIR }}/src/bridge_generated.io.rs
-            ${{ env.CLIENT_DIR }}/flutter/lib/generated_bridge.dart
-            ${{ env.CLIENT_DIR }}/flutter/lib/generated_bridge.freezed.dart
-            ${{ env.CLIENT_DIR }}/flutter/macos/Runner/bridge_generated.h
-            ${{ env.CLIENT_DIR }}/flutter/ios/Runner/bridge_generated.h
+          path: bridge-out
           if-no-files-found: error
 
   # ─── Linux ────────────────────────────────────────────────────────────────
@@ -110,26 +125,22 @@ jobs:
       - name: Install build dependencies
         working-directory: ${{ github.workspace }}
         run: |
-          set -x
+          set -eux
           mkdir -p "${GITHUB_WORKSPACE}/failure-logs"
-          {
-            echo "=== apt update ==="
-            sudo apt-get -o DPkg::Lock::Timeout=600 update -y
-            # Slim set: Flutter Linux + RustDesk native deps (avoid optional that conflict on GHA images)
-            echo "=== apt install (core) ==="
-            sudo apt-get -o DPkg::Lock::Timeout=600 install -y \
-              clang cmake curl g++ gcc git nasm ninja-build pkg-config wget \
-              libgtk-3-dev libclang-dev llvm-dev \
-              libpam0g-dev libpulse-dev libva-dev libssl-dev \
-              libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-              libxdo-dev libxfixes-dev python3 dpkg-dev
-            echo "=== apt install (optional UI/media) ==="
-            sudo apt-get -o DPkg::Lock::Timeout=600 install -y \
-              libayatana-appindicator3-dev libasound2-dev \
-              libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-              || echo "::warning::optional media/appindicator packages failed — continuing"
-          } 2>&1 | tee "${GITHUB_WORKSPACE}/failure-logs/linux-apt.log"
-          exit ${PIPESTATUS[0]}
+          exec > >(tee "${GITHUB_WORKSPACE}/failure-logs/linux-apt.log") 2>&1
+          sudo apt-get -o DPkg::Lock::Timeout=600 update -y
+          # Keep this list minimal — fat UI/media deps caused apt exit 100 on GHA images.
+          sudo apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
+            clang cmake curl g++ gcc git nasm ninja-build pkg-config wget \
+            libgtk-3-dev libclang-dev llvm-dev \
+            libpam0g-dev libpulse-dev libva-dev libssl-dev \
+            libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxdo-dev libxfixes-dev python3 dpkg-dev
+          # Optional (do not fail the job)
+          sudo apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
+            libayatana-appindicator3-dev libasound2-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            || echo "::warning::optional apt packages skipped"
 
       - name: Upload apt log (always)
         if: failure() || success()
@@ -148,12 +159,23 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: bridge-artifact
-          path: .
+          path: bridge-in
 
-      - name: Verify bridge
+      - name: Apply bridge files
+        working-directory: ${{ github.workspace }}
+        shell: bash
         run: |
-          test -f src/bridge_generated.rs
-          test -f flutter/lib/generated_bridge.dart
+          set -eux
+          find bridge-in -type f | sort
+          cp -f bridge-in/src/bridge_generated.rs unydesk-client/src/
+          cp -f bridge-in/src/bridge_generated.io.rs unydesk-client/src/
+          cp -f bridge-in/flutter/lib/generated_bridge.dart unydesk-client/flutter/lib/
+          cp -f bridge-in/flutter/lib/generated_bridge.freezed.dart unydesk-client/flutter/lib/ || true
+          mkdir -p unydesk-client/flutter/macos/Runner unydesk-client/flutter/ios/Runner
+          cp -f bridge-in/flutter/macos/Runner/bridge_generated.h unydesk-client/flutter/macos/Runner/
+          cp -f bridge-in/flutter/ios/Runner/bridge_generated.h unydesk-client/flutter/ios/Runner/
+          test -f unydesk-client/src/bridge_generated.rs
+          test -f unydesk-client/flutter/lib/generated_bridge.dart
 
       - name: Restore vcpkg binary cache
         uses: actions/cache@v4
@@ -326,15 +348,23 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: bridge-artifact
-          path: .
+          path: bridge-in
 
-      - name: Verify bridge
+      - name: Apply bridge files
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
           set -eux
-          find . -name 'bridge_generated.rs' -o -name 'generated_bridge.dart' | head
-          test -f src/bridge_generated.rs
-          test -f flutter/lib/generated_bridge.dart
+          find bridge-in -type f | sort
+          cp -f bridge-in/src/bridge_generated.rs unydesk-client/src/
+          cp -f bridge-in/src/bridge_generated.io.rs unydesk-client/src/
+          cp -f bridge-in/flutter/lib/generated_bridge.dart unydesk-client/flutter/lib/
+          cp -f bridge-in/flutter/lib/generated_bridge.freezed.dart unydesk-client/flutter/lib/ || true
+          mkdir -p unydesk-client/flutter/macos/Runner unydesk-client/flutter/ios/Runner
+          cp -f bridge-in/flutter/macos/Runner/bridge_generated.h unydesk-client/flutter/macos/Runner/
+          cp -f bridge-in/flutter/ios/Runner/bridge_generated.h unydesk-client/flutter/ios/Runner/
+          test -f unydesk-client/src/bridge_generated.rs
+          test -f unydesk-client/flutter/lib/generated_bridge.dart
 
       - name: Restore vcpkg binary cache
         uses: actions/cache@v4
