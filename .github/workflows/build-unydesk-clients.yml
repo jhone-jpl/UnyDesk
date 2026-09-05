@@ -1,0 +1,29 @@
+# Build UnyDesk clients for Linux + Windows in parallel
+#
+# Trigger: Actions → "Build UnyDesk Clients" → Run workflow
+# Artifacts: unydesk-linux-x64, unydesk-linux-x64-deb, unydesk-windows-x64
+
+name: Build UnyDesk Clients
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths:
+      - "unydesk-client/**"
+      - ".github/workflows/build-unydesk-linux.yml"
+      - ".github/workflows/build-unydesk-windows.yml"
+      - ".github/workflows/build-unydesk-clients.yml"
+
+concurrency:
+  group: unydesk-clients-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux x64
+    uses: ./.github/workflows/build-unydesk-linux.yml
+
+  windows:
+    name: Windows x64
+    uses: ./.github/workflows/build-unydesk-windows.yml

@@ -7,11 +7,7 @@ name: Build UnyDesk Linux
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main, master]
-    paths:
-      - "unydesk-client/**"
-      - ".github/workflows/build-unydesk-linux.yml"
+  workflow_call:
 
 concurrency:
   group: unydesk-linux-${{ github.ref }}

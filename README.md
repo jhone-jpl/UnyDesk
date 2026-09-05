@@ -27,16 +27,15 @@ Client defaults: set `api-server` to `http://<host>:21114` and rendezvous to `<h
 
 Signing keys for white-label `custom.txt` live in `keys/` (gitignored secrets).
 
-## Build cliente Windows
+## Build clientes (Linux + Windows)
 
-Não compila neste Linux. Use GitHub Actions:
+No GitHub Actions, um único botão dispara os dois em paralelo:
 
-→ [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md)  
-→ workflow [`.github/workflows/build-unydesk-windows.yml`](.github/workflows/build-unydesk-windows.yml)  
-→ artefato `unydesk-windows-x64`
+→ **Actions → Build UnyDesk Clients → Run workflow**  
+→ [`.github/workflows/build-unydesk-clients.yml`](.github/workflows/build-unydesk-clients.yml)
 
-## Build cliente Linux
+Artefatos: `unydesk-linux-x64`, `unydesk-linux-x64-deb`, `unydesk-windows-x64`
 
-→ [`docs/BUILD-LINUX.md`](docs/BUILD-LINUX.md)  
-→ workflow [`.github/workflows/build-unydesk-linux.yml`](.github/workflows/build-unydesk-linux.yml)  
-→ artefatos `unydesk-linux-x64` / `unydesk-linux-x64-deb`
+Docs: [`docs/BUILD-LINUX.md`](docs/BUILD-LINUX.md) · [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md)
+
+(Também dá para rodar só Linux ou só Windows pelos workflows individuais.)

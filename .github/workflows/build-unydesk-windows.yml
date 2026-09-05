@@ -10,11 +10,7 @@ name: Build UnyDesk Windows
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main, master]
-    paths:
-      - "unydesk-client/**"
-      - ".github/workflows/build-unydesk-windows.yml"
+  workflow_call:
 
 concurrency:
   group: unydesk-windows-${{ github.ref }}
