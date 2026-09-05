@@ -133,6 +133,9 @@ jobs:
       run:
         working-directory: ${{ env.CLIENT_DIR }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
       - name: Free disk space
         shell: pwsh
         working-directory: ${{ github.workspace }}
@@ -149,9 +152,6 @@ jobs:
             "C:\hostedtoolcache\windows\Python\3.8*"
           )
           Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize
-
-      - name: Checkout
-        uses: actions/checkout@v5
 
       - name: Require vendored hbb_common
         shell: bash

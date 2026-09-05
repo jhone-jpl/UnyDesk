@@ -98,7 +98,12 @@ jobs:
       run:
         working-directory: ${{ env.CLIENT_DIR }}
     steps:
+      # Checkout MUST be first: defaults.working-directory is unydesk-client.
+      - name: Checkout
+        uses: actions/checkout@v5
+
       - name: Free disk space
+        working-directory: ${{ github.workspace }}
         run: |
           sudo rm -rf /opt/ghc /usr/local/lib/android /usr/share/dotnet || true
           sudo apt-get update -y
@@ -117,10 +122,7 @@ jobs:
         with:
           swap-size-gb: 8
 
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Ensure hbb_common
+      - name: Require vendored hbb_common
         run: |
           if [ ! -f libs/hbb_common/src/config.rs ]; then
             echo "::error::libs/hbb_common missing from git (vendored UnyDesk tree required)"
