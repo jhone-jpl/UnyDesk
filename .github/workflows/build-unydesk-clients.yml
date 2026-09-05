@@ -1,31 +1,490 @@
-# Build UnyDesk clients for Linux + Windows in parallel
+# Build UnyDesk clients — Linux + Windows in one workflow (no reusable-call nesting).
 #
 # Trigger: Actions → "Build UnyDesk Clients" → Run workflow
 # Artifacts: unydesk-linux-x64, unydesk-linux-x64-deb, unydesk-windows-x64
+# On failure: *-failure-logs artifacts (if the failing step wrote logs)
 
 name: Build UnyDesk Clients
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main, master]
-    paths:
-      - "unydesk-client/**"
-      - ".github/workflows/build-unydesk-linux.yml"
-      - ".github/workflows/build-unydesk-windows.yml"
-      - ".github/workflows/build-unydesk-clients.yml"
 
 concurrency:
   group: unydesk-clients-${{ github.ref }}
   cancel-in-progress: true
 
-jobs:
-  linux:
-    name: Linux x64
-    uses: ./.github/workflows/build-unydesk-linux.yml
-    secrets: inherit
+env:
+  RUST_VERSION: "1.75"
+  CARGO_EXPAND_VERSION: "1.0.95"
+  FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
+  FLUTTER_VERSION: "3.24.5"
+  LLVM_VERSION: "15.0.6"
+  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  CLIENT_DIR: unydesk-client
+  DEBIAN_FRONTEND: noninteractive
 
-  windows:
-    name: Windows x64
-    uses: ./.github/workflows/build-unydesk-windows.yml
-    secrets: inherit
+jobs:
+  # ─── shared bridge (one job for both platforms) ───────────────────────────
+  generate-bridge:
+    name: Generate flutter-rust-bridge
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: ${{ env.CLIENT_DIR }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Require vendored hbb_common
+        run: |
+          test -f libs/hbb_common/src/config.rs
+          grep -q UnyDesk libs/hbb_common/src/config.rs
+
+      - name: Install prerequisites
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -eux
+          sudo apt-get -o DPkg::Lock::Timeout=600 update -y
+          sudo apt-get -o DPkg::Lock::Timeout=600 install -y \
+            clang cmake curl gcc g++ git libclang-dev \
+            libgtk-3-dev llvm-dev nasm ninja-build pkg-config wget
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: "3.22.3"
+          cache: true
+
+      - name: Install codegen tools
+        run: |
+          cargo install cargo-expand --version ${{ env.CARGO_EXPAND_VERSION }} --locked
+          cargo install flutter_rust_bridge_codegen --version ${{ env.FLUTTER_RUST_BRIDGE_VERSION }} --features "uuid" --locked
+          sed -i -e 's/extended_text: 14.0.0/extended_text: 13.0.0/g' flutter/pubspec.yaml || true
+          cd flutter && flutter pub get
+
+      - name: Generate bridge
+        run: |
+          ~/.cargo/bin/flutter_rust_bridge_codegen \
+            --rust-input ./src/flutter_ffi.rs \
+            --dart-output ./flutter/lib/generated_bridge.dart \
+            --c-output ./flutter/macos/Runner/bridge_generated.h
+          cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
+          sed -i "s/ffi.NativeFunction<ffi.Bool Function(DartPort/ffi.NativeFunction<ffi.Uint8 Function(DartPort/g" flutter/lib/generated_bridge.dart || true
+          test -f src/bridge_generated.rs
+          test -f flutter/lib/generated_bridge.dart
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bridge-artifact
+          path: |
+            ${{ env.CLIENT_DIR }}/src/bridge_generated.rs
+            ${{ env.CLIENT_DIR }}/src/bridge_generated.io.rs
+            ${{ env.CLIENT_DIR }}/flutter/lib/generated_bridge.dart
+            ${{ env.CLIENT_DIR }}/flutter/lib/generated_bridge.freezed.dart
+            ${{ env.CLIENT_DIR }}/flutter/macos/Runner/bridge_generated.h
+            ${{ env.CLIENT_DIR }}/flutter/ios/Runner/bridge_generated.h
+          if-no-files-found: error
+
+  # ─── Linux ────────────────────────────────────────────────────────────────
+  build-linux:
+    name: Build Linux x64
+    needs: [generate-bridge]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    defaults:
+      run:
+        working-directory: ${{ env.CLIENT_DIR }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Free disk space
+        working-directory: ${{ github.workspace }}
+        run: |
+          sudo rm -rf /opt/ghc /usr/local/lib/android /usr/share/dotnet || true
+          df -h
+
+      - name: Install build dependencies
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -x
+          mkdir -p "${GITHUB_WORKSPACE}/failure-logs"
+          {
+            echo "=== apt update ==="
+            sudo apt-get -o DPkg::Lock::Timeout=600 update -y
+            # Slim set: Flutter Linux + RustDesk native deps (avoid optional that conflict on GHA images)
+            echo "=== apt install (core) ==="
+            sudo apt-get -o DPkg::Lock::Timeout=600 install -y \
+              clang cmake curl g++ gcc git nasm ninja-build pkg-config wget \
+              libgtk-3-dev libclang-dev llvm-dev \
+              libpam0g-dev libpulse-dev libva-dev libssl-dev \
+              libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+              libxdo-dev libxfixes-dev python3 dpkg-dev
+            echo "=== apt install (optional UI/media) ==="
+            sudo apt-get -o DPkg::Lock::Timeout=600 install -y \
+              libayatana-appindicator3-dev libasound2-dev \
+              libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+              || echo "::warning::optional media/appindicator packages failed — continuing"
+          } 2>&1 | tee "${GITHUB_WORKSPACE}/failure-logs/linux-apt.log"
+          exit ${PIPESTATUS[0]}
+
+      - name: Upload apt log (always)
+        if: failure() || success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-apt-log
+          path: failure-logs/linux-apt.log
+          if-no-files-found: ignore
+
+      - name: Set swap
+        uses: pierotofy/set-swap-space@49819abfb41bd9b44fb781159c033dba90353a7c
+        with:
+          swap-size-gb: 12
+
+      - name: Restore bridge
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: .
+
+      - name: Verify bridge
+        run: |
+          test -f src/bridge_generated.rs
+          test -f flutter/lib/generated_bridge.dart
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: vcpkg-linux-x64-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('unydesk-client/vcpkg.json', 'unydesk-client/res/vcpkg/**') }}
+          restore-keys: |
+            vcpkg-linux-x64-${{ env.VCPKG_COMMIT_ID }}-
+
+      - name: Configure VCPKG_BINARY_SOURCES
+        working-directory: ${{ github.workspace }}
+        run: |
+          mkdir -p "${GITHUB_WORKSPACE}/.vcpkg-cache"
+          echo "VCPKG_BINARY_SOURCES=clear;files,${GITHUB_WORKSPACE}/.vcpkg-cache,readwrite" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-unknown-linux-gnu
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.CLIENT_DIR }} -> target
+          prefix-key: ubuntu-22.04-unydesk
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Patch Flutter dropdown
+        run: |
+          patch_file=".github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          if [[ -f "$patch_file" ]]; then
+            FLUTTER_ROOT="$(dirname "$(dirname "$(which flutter)")")"
+            cp "$patch_file" "$FLUTTER_ROOT/" || true
+            (cd "$FLUTTER_ROOT" && git apply flutter_3.24.4_dropdown_menu_enableFilter.diff) || true
+          fi
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: /opt/vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          vcpkgJsonGlob: "unydesk-client/vcpkg.json"
+          doNotCache: true
+
+      - name: Install vcpkg packages
+        run: |
+          set -eux
+          sudo apt-get -o DPkg::Lock::Timeout=600 remove -y libopus-dev || true
+          mkdir -p "${GITHUB_WORKSPACE}/failure-logs"
+          set +e
+          "$VCPKG_ROOT/vcpkg" install --triplet x64-linux --x-install-root="$VCPKG_ROOT/installed" \
+            2>&1 | tee "${GITHUB_WORKSPACE}/failure-logs/linux-vcpkg.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            find "${VCPKG_ROOT}/buildtrees" -name "*.log" 2>/dev/null | tail -n 30 | while read -r f; do
+              echo "===== $f =====" >> "${GITHUB_WORKSPACE}/failure-logs/linux-vcpkg.log"
+              tail -n 60 "$f" >> "${GITHUB_WORKSPACE}/failure-logs/linux-vcpkg.log" || true
+            done
+            exit "$rc"
+          fi
+
+      - name: Upload vcpkg log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-vcpkg-failure-log
+          path: failure-logs/linux-vcpkg.log
+          if-no-files-found: ignore
+
+      - name: Build UnyDesk (Flutter + deb)
+        env:
+          VCPKG_ROOT: /opt/vcpkg
+        run: |
+          set -eux
+          sed -i 's/\["cdylib", "staticlib", "rlib"\]/["cdylib"]/g' Cargo.toml
+          mkdir -p "${GITHUB_WORKSPACE}/failure-logs"
+          set +e
+          python3 ./build.py --flutter --hwcodec 2>&1 | tee "${GITHUB_WORKSPACE}/failure-logs/linux-build.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+          test -d flutter/build/linux/x64/release/bundle
+          ls -lah flutter/build/linux/x64/release/bundle/
+          ls -lah rustdesk-*.deb || true
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build-failure-log
+          path: failure-logs/linux-build.log
+          if-no-files-found: ignore
+
+      - name: Prepare artifacts
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -eux
+          mkdir -p artifacts/unydesk-linux-x64
+          cp -a unydesk-client/flutter/build/linux/x64/release/bundle/. artifacts/unydesk-linux-x64/
+          if ls unydesk-client/rustdesk-*.deb 1>/dev/null 2>&1; then
+            cp unydesk-client/rustdesk-*.deb artifacts/
+            for f in artifacts/rustdesk-*.deb; do mv "$f" "${f/rustdesk-/unydesk-}"; done
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unydesk-linux-x64
+          path: artifacts/unydesk-linux-x64
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unydesk-linux-x64-deb
+          path: artifacts/unydesk-*.deb
+          if-no-files-found: warn
+
+  # ─── Windows helper DLL (optional) ────────────────────────────────────────
+  build-topmost-dll:
+    name: Build WindowInjection.dll
+    runs-on: windows-2022
+    continue-on-error: true
+    steps:
+      - uses: microsoft/setup-msbuild@v2
+      - name: Build
+        shell: cmd
+        run: |
+          git clone https://github.com/rustdesk-org/RustDeskTempTopMostWindow RustDeskTempTopMostWindow
+          cd RustDeskTempTopMostWindow
+          git checkout ecd8d6a139eee76845ea66423fb739af450fda90
+          msbuild WindowInjection\WindowInjection.vcxproj -p:Configuration=Release -p:Platform=x64 /p:TargetVersion=Windows10
+      - uses: actions/upload-artifact@v4
+        with:
+          name: topmostwindow-artifacts-x64
+          path: RustDeskTempTopMostWindow/WindowInjection/x64/Release/WindowInjection.dll
+          if-no-files-found: warn
+
+  # ─── Windows ──────────────────────────────────────────────────────────────
+  build-windows:
+    name: Build Windows x64
+    needs: [generate-bridge, build-topmost-dll]
+    if: ${{ always() && needs.generate-bridge.result == 'success' }}
+    runs-on: windows-2022
+    timeout-minutes: 360
+    defaults:
+      run:
+        working-directory: ${{ env.CLIENT_DIR }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Free disk space
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        run: |
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue @(
+            "C:\Program Files\dotnet",
+            "C:\Program Files (x86)\Android",
+            "C:\Program Files\Android",
+            "C:\Android",
+            "C:\hostedtoolcache\windows\CodeQL"
+          )
+          Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize
+
+      - name: Restore bridge
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: .
+
+      - name: Verify bridge
+        shell: bash
+        run: |
+          set -eux
+          find . -name 'bridge_generated.rs' -o -name 'generated_bridge.dart' | head
+          test -f src/bridge_generated.rs
+          test -f flutter/lib/generated_bridge.dart
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.vcpkg-cache
+          key: vcpkg-win-x64-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('unydesk-client/vcpkg.json', 'unydesk-client/res/vcpkg/**') }}
+          restore-keys: |
+            vcpkg-win-x64-${{ env.VCPKG_COMMIT_ID }}-
+
+      - name: Configure VCPKG_BINARY_SOURCES
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          CACHE_DIR="${GITHUB_WORKSPACE}/.vcpkg-cache"
+          mkdir -p "$CACHE_DIR"
+          CACHE_DIR="${CACHE_DIR//\\//}"
+          echo "VCPKG_BINARY_SOURCES=clear;files,${CACHE_DIR},readwrite" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          architecture: x64
+
+      - name: Custom Flutter engine (RustDesk)
+        shell: pwsh
+        run: |
+          flutter doctor -v
+          flutter precache --windows
+          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          $candidates = @(
+            "C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release",
+            "$env:FLUTTER_ROOT/bin/cache/artifacts/engine/windows-x64-release"
+          )
+          $engine = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $engine) { throw "Flutter windows-x64-release engine dir not found" }
+          Move-Item -Force windows-x64-release/* $engine/
+
+      - name: Patch Flutter dropdown
+        shell: bash
+        run: |
+          patch_file=".github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
+          if [[ -f "$patch_file" ]]; then
+            FLUTTER_ROOT="$(dirname "$(dirname "$(which flutter)")")"
+            cp "$patch_file" "$FLUTTER_ROOT/" || true
+            (cd "$FLUTTER_ROOT" && git apply flutter_3.24.4_dropdown_menu_enableFilter.diff) || true
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.CLIENT_DIR }} -> target
+          prefix-key: windows-2022-unydesk
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          vcpkgJsonGlob: "unydesk-client/vcpkg.json"
+          doNotCache: true
+
+      - name: Install vcpkg packages
+        shell: bash
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
+        run: |
+          set -eux
+          mkdir -p "${GITHUB_WORKSPACE}/failure-logs"
+          set +e
+          "$VCPKG_ROOT/vcpkg" install \
+            --triplet x64-windows-static \
+            --x-install-root="$VCPKG_ROOT/installed" \
+            2>&1 | tee "${GITHUB_WORKSPACE}/failure-logs/windows-vcpkg.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            find "$VCPKG_ROOT/buildtrees" -name "*.log" 2>/dev/null | tail -n 30 | while read -r f; do
+              echo "===== $f =====" >> "${GITHUB_WORKSPACE}/failure-logs/windows-vcpkg.log"
+              tail -n 60 "$f" >> "${GITHUB_WORKSPACE}/failure-logs/windows-vcpkg.log" || true
+            done
+            exit "$rc"
+          fi
+
+      - name: Upload vcpkg log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-vcpkg-failure-log
+          path: failure-logs/windows-vcpkg.log
+          if-no-files-found: ignore
+
+      - name: Build UnyDesk (Flutter)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE/failure-logs" | Out-Null
+          python --version
+          python .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram `
+            2>&1 | Tee-Object -FilePath "$env:GITHUB_WORKSPACE/failure-logs/windows-build.log"
+          if ($LASTEXITCODE -ne 0) { throw "build.py failed with exit $LASTEXITCODE" }
+          $ErrorActionPreference = "Stop"
+          if (Test-Path .\flutter\build\windows\x64\runner\Release) {
+            Move-Item -Force .\flutter\build\windows\x64\runner\Release .\unydesk
+          } elseif (Test-Path .\flutter\build\windows\runner\Release) {
+            Move-Item -Force .\flutter\build\windows\runner\Release .\unydesk
+          } else {
+            throw "Flutter Windows Release output not found"
+          }
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build-failure-log
+          path: failure-logs/windows-build.log
+          if-no-files-found: ignore
+
+      - name: Add usbmmidd helper
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
+          Expand-Archive usbmmidd_v2.zip -DestinationPath .
+          Remove-Item -Path usbmmidd_v2\Win32 -Recurse -ErrorAction SilentlyContinue
+          Move-Item -Force .\usbmmidd_v2 .\unydesk\
+
+      - name: Download WindowInjection.dll
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: topmostwindow-artifacts-x64
+          path: ${{ env.CLIENT_DIR }}/unydesk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unydesk-windows-x64
+          path: ${{ env.CLIENT_DIR }}/unydesk
+          if-no-files-found: error
