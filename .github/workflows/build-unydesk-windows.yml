@@ -2,6 +2,9 @@
 #
 # Trigger: Actions → "Build UnyDesk Windows" → Run workflow
 # Artifact: unydesk-windows-x64
+#
+# Aligned with unydesk-client/.github/workflows/flutter-build.yml (x64 matrix),
+# adapted for monorepo layout (unydesk-client/).
 
 name: Build UnyDesk Windows
 
@@ -18,15 +21,13 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Match RustDesk 1.4.9 flutter-build.yml
   RUST_VERSION: "1.75"
   CARGO_EXPAND_VERSION: "1.0.95"
   FLUTTER_RUST_BRIDGE_VERSION: "1.80.1"
   FLUTTER_VERSION: "3.24.5"
   LLVM_VERSION: "15.0.6"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
-  # x-gha binary cache was removed/broken by GitHub Actions Cache API changes.
-  # Use a local files cache restored via actions/cache instead.
-  VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/.vcpkg-cache,readwrite"
   CLIENT_DIR: unydesk-client
 
 jobs:
@@ -40,13 +41,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Ensure hbb_common
+      - name: Require vendored hbb_common
         run: |
           if [ ! -f libs/hbb_common/src/config.rs ]; then
-            rm -rf libs/hbb_common
-            git clone --depth 1 https://github.com/rustdesk/hbb_common.git libs/hbb_common
+            echo "::error::libs/hbb_common missing from git (do not clone latest — breaks 1.4.9 + UnyDesk branding)"
+            exit 1
           fi
-          rm -rf libs/hbb_common/.git
+          grep -q 'UnyDesk' libs/hbb_common/src/config.rs
 
       - name: Install prerequisites
         run: |
@@ -82,6 +83,9 @@ jobs:
             --c-output ./flutter/macos/Runner/bridge_generated.h
           cp ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h
           sed -i "s/ffi.NativeFunction<ffi.Bool Function(DartPort/ffi.NativeFunction<ffi.Uint8 Function(DartPort/g" flutter/lib/generated_bridge.dart || true
+          test -f src/bridge_generated.rs
+          test -f flutter/lib/generated_bridge.dart
+          ls -la src/bridge_generated* flutter/lib/generated_bridge* || true
 
       - name: Upload bridge
         uses: actions/upload-artifact@v4
@@ -94,11 +98,11 @@ jobs:
             ${{ env.CLIENT_DIR }}/flutter/lib/generated_bridge.freezed.dart
             ${{ env.CLIENT_DIR }}/flutter/macos/Runner/bridge_generated.h
             ${{ env.CLIENT_DIR }}/flutter/ios/Runner/bridge_generated.h
+          if-no-files-found: error
 
   build-topmost-dll:
     name: Build WindowInjection.dll
     runs-on: windows-2022
-    # Privacy-mode helper only — do not block the main client build
     continue-on-error: true
     steps:
       - name: Add MSBuild to PATH
@@ -124,21 +128,38 @@ jobs:
     needs: [generate-bridge, build-topmost-dll]
     if: ${{ always() && needs.generate-bridge.result == 'success' }}
     runs-on: windows-2022
+    timeout-minutes: 360
     defaults:
       run:
         working-directory: ${{ env.CLIENT_DIR }}
     steps:
+      - name: Free disk space
+        shell: pwsh
+        working-directory: ${{ github.workspace }}
+        run: |
+          # Windows runners fill up during vcpkg+ffmpeg+cargo (~40–60+ min).
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue @(
+            "C:\Program Files\dotnet",
+            "C:\Program Files (x86)\Android",
+            "C:\Program Files\Android",
+            "C:\Android",
+            "C:\hostedtoolcache\windows\CodeQL",
+            "C:\hostedtoolcache\windows\Python\3.6*",
+            "C:\hostedtoolcache\windows\Python\3.7*",
+            "C:\hostedtoolcache\windows\Python\3.8*"
+          )
+          Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize
+
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Ensure hbb_common
+      - name: Require vendored hbb_common
         shell: bash
         run: |
           if [ ! -f libs/hbb_common/src/config.rs ]; then
-            rm -rf libs/hbb_common
-            git clone --depth 1 https://github.com/rustdesk/hbb_common.git libs/hbb_common
+            echo "::error::libs/hbb_common missing from git"
+            exit 1
           fi
-          rm -rf libs/hbb_common/.git
 
       - name: Restore bridge
         uses: actions/download-artifact@v4
@@ -146,13 +167,32 @@ jobs:
           name: bridge-artifact
           path: .
 
-      - name: Restore vcpkg binary cache
+      - name: Verify bridge files
+        shell: bash
+        run: |
+          test -f src/bridge_generated.rs
+          test -f flutter/lib/generated_bridge.dart
+          ls -la src/bridge_generated* flutter/lib/generated_bridge* || true
+
+      - name: Restore vcpkg binary cache (files)
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/.vcpkg-cache
           key: vcpkg-win-x64-${{ env.VCPKG_COMMIT_ID }}-${{ hashFiles('unydesk-client/vcpkg.json', 'unydesk-client/res/vcpkg/**') }}
           restore-keys: |
             vcpkg-win-x64-${{ env.VCPKG_COMMIT_ID }}-
+
+      - name: Configure VCPKG_BINARY_SOURCES
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          # NEVER use x-gha (removed / returns 400 on current Actions Cache API).
+          # Normalize path to forward slashes — backslashes break vcpkg on Windows.
+          CACHE_DIR="${GITHUB_WORKSPACE}/.vcpkg-cache"
+          mkdir -p "$CACHE_DIR"
+          CACHE_DIR="${CACHE_DIR//\\//}"
+          echo "VCPKG_BINARY_SOURCES=clear;files,${CACHE_DIR},readwrite" >> "$GITHUB_ENV"
+          echo "Using VCPKG_BINARY_SOURCES=clear;files,${CACHE_DIR},readwrite"
 
       - name: Install LLVM
         uses: KyleMayes/install-llvm-action@v2
@@ -180,14 +220,16 @@ jobs:
           $engine = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if (-not $engine) { throw "Flutter windows-x64-release engine dir not found" }
           Move-Item -Force windows-x64-release/* $engine/
+          Write-Host "Installed custom engine into $engine"
 
       - name: Patch Flutter dropdown
         shell: bash
         run: |
           patch_file=".github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff"
           if [[ -f "$patch_file" ]]; then
-            cp "$patch_file" "$(dirname "$(dirname "$(which flutter)")")"
-            cd "$(dirname "$(dirname "$(which flutter)")")"
+            FLUTTER_ROOT="$(dirname "$(dirname "$(which flutter)")")"
+            cp "$patch_file" "$FLUTTER_ROOT/"
+            cd "$FLUTTER_ROOT"
             git apply flutter_3.24.4_dropdown_menu_enableFilter.diff || true
           fi
 
@@ -198,34 +240,44 @@ jobs:
           targets: x86_64-pc-windows-msvc
           components: rustfmt
 
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ env.CLIENT_DIR }} -> target
+          prefix-key: windows-2022-unydesk
+
       - name: Setup vcpkg
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgDirectory: C:\vcpkg
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          vcpkgJsonGlob: "unydesk-client/vcpkg.json"
           doNotCache: true
 
       - name: Install vcpkg packages
         shell: bash
         env:
           VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
-          VCPKG_BINARY_SOURCES: ${{ env.VCPKG_BINARY_SOURCES }}
         run: |
-          mkdir -p "${GITHUB_WORKSPACE}/.vcpkg-cache"
-          if ! $VCPKG_ROOT/vcpkg install \
+          echo "VCPKG_ROOT=$VCPKG_ROOT"
+          echo "VCPKG_BINARY_SOURCES=$VCPKG_BINARY_SOURCES"
+          clang --version || true
+          if ! "$VCPKG_ROOT/vcpkg" install \
             --triplet x64-windows-static \
             --x-install-root="$VCPKG_ROOT/installed"; then
-            echo "::error::vcpkg install failed — dumping recent logs"
-            find "${VCPKG_ROOT}/buildtrees" -name "*.log" 2>/dev/null | tail -n 40 | while read -r f; do
+            echo "::error::vcpkg install failed"
+            find "$VCPKG_ROOT/buildtrees" -name "*.log" 2>/dev/null | tail -n 50 | while read -r f; do
               echo "===== $f ====="
-              tail -n 80 "$f" || true
+              tail -n 100 "$f" || true
             done
             exit 1
           fi
+          head -n 80 "$VCPKG_ROOT/buildtrees/ffmpeg/build-x64-windows-static-rel-out.log" || true
 
       - name: Build UnyDesk (Flutter)
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec --vram
           if ($LASTEXITCODE -ne 0) { throw "build.py failed with exit $LASTEXITCODE" }
           if (Test-Path .\flutter\build\windows\x64\runner\Release) {
@@ -233,8 +285,10 @@ jobs:
           } elseif (Test-Path .\flutter\build\windows\runner\Release) {
             Move-Item -Force .\flutter\build\windows\runner\Release .\unydesk
           } else {
+            Get-ChildItem -Recurse .\flutter\build\windows -ErrorAction SilentlyContinue | Select-Object -First 80 FullName
             throw "Flutter Windows Release output not found"
           }
+          Get-ChildItem .\unydesk | Select-Object Name, Length
 
       - name: Add usbmmidd helper
         shell: pwsh
