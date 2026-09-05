@@ -129,18 +129,20 @@ jobs:
           mkdir -p "${GITHUB_WORKSPACE}/failure-logs"
           exec > >(tee "${GITHUB_WORKSPACE}/failure-logs/linux-apt.log") 2>&1
           sudo apt-get -o DPkg::Lock::Timeout=600 update -y
-          # Keep this list minimal — fat UI/media deps caused apt exit 100 on GHA images.
+          # Required set from RustDesk README (Ubuntu) + va/ssl for hwcodec/vcpkg
           sudo apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
+            zip yasm make \
             clang cmake curl g++ gcc git nasm ninja-build pkg-config wget \
             libgtk-3-dev libclang-dev llvm-dev \
-            libpam0g-dev libpulse-dev libva-dev libssl-dev \
-            libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxdo-dev libxfixes-dev python3 dpkg-dev
-          # Optional (do not fail the job)
-          sudo apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
-            libayatana-appindicator3-dev libasound2-dev \
+            libasound2-dev libpulse-dev libpam0g-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-            || echo "::warning::optional apt packages skipped"
+            libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxdo-dev libxfixes-dev \
+            libva-dev libssl-dev python3 dpkg-dev
+          # Tray indicator — optional on some images (conflicts); build can proceed without it
+          sudo apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
+            libayatana-appindicator3-dev \
+            || echo "::warning::libayatana-appindicator3-dev skipped"
 
       - name: Upload apt log (always)
         if: failure() || success()
@@ -262,7 +264,16 @@ jobs:
           python3 ./build.py --flutter --hwcodec 2>&1 | tee "${GITHUB_WORKSPACE}/failure-logs/linux-build.log"
           rc=${PIPESTATUS[0]}
           set -e
-          if [ "$rc" -ne 0 ]; then exit "$rc"; fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::linux-build.log (tail)"
+            tail -n 100 "${GITHUB_WORKSPACE}/failure-logs/linux-build.log" || true
+            echo "::endgroup::"
+            # Surface last lines in annotations (readable without downloading the zip)
+            tail -n 30 "${GITHUB_WORKSPACE}/failure-logs/linux-build.log" | while IFS= read -r line; do
+              echo "::error::${line}"
+            done || true
+            exit "$rc"
+          fi
           test -d flutter/build/linux/x64/release/bundle
           ls -lah flutter/build/linux/x64/release/bundle/
           ls -lah rustdesk-*.deb || true
