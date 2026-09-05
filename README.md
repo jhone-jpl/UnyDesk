@@ -34,3 +34,9 @@ Não compila neste Linux. Use GitHub Actions:
 → [`docs/BUILD-WINDOWS.md`](docs/BUILD-WINDOWS.md)  
 → workflow [`.github/workflows/build-unydesk-windows.yml`](.github/workflows/build-unydesk-windows.yml)  
 → artefato `unydesk-windows-x64`
+
+## Build cliente Linux
+
+→ [`docs/BUILD-LINUX.md`](docs/BUILD-LINUX.md)  
+→ workflow [`.github/workflows/build-unydesk-linux.yml`](.github/workflows/build-unydesk-linux.yml)  
+→ artefatos `unydesk-linux-x64` / `unydesk-linux-x64-deb`
