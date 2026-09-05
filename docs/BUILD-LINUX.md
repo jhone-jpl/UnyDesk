@@ -3,11 +3,12 @@
 Neste host de desenvolvimento o Rust/Flutter podem não estar instalados.
 Use GitHub Actions:
 
-## Disparo
+## Disparo (recomendado: os dois juntos)
 
-GitHub → **Actions** → **Build UnyDesk Linux** → **Run workflow**
+**Actions → Build UnyDesk Clients → Run workflow**  
+(Linux + Windows em paralelo)
 
-Ou push em `main` alterando `unydesk-client/**` ou este workflow.
+Ou só Linux: **Actions → Build UnyDesk Linux → Run workflow**
 
 ## Artefatos
 

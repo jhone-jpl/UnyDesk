@@ -2,37 +2,23 @@
 
 Neste Linux **não** dá para gerar o `.exe`. Use o GitHub Actions.
 
-## Diagnóstico do run ~49 min que falhou
+## Disparo (recomendado: os dois juntos)
 
-Aquelas annotations batem com:
+**Actions → Build UnyDesk Clients → Run workflow**  
+(Linux + Windows em paralelo)
 
-| Annotation | Significado |
-|------------|-------------|
-| `Failed to restore/save` Cache **400** / “services aren't available” | Cache binário **vcpkg `x-gha`** quebrado (API do Actions Cache). Quase sempre depois de ~40–60 min compilando ports. |
-| `libyuv` “MSVC … very slow” | Aviso do port overlay; **não** é o exit 1. |
-| Node.js 20 deprecated | Só warning. |
-| `WindowInjection.dll` | Opcional; job com `continue-on-error`. |
+Ou só Windows: **Actions → Build UnyDesk Windows → Run workflow**
 
-Ou seja: **não faltava Flutter/Rust/versão** — o ponto frágil era o cache `x-gha` + falta de higiene (disco, path Windows do cache, `vcpkgJsonGlob`, verificação do bridge / `hbb_common`).
-
-## 1. Dispare
-
-GitHub → **Actions** → **Build UnyDesk Windows** → **Run workflow**
-
-```bash
-gh workflow run build-unydesk-windows.yml
-```
-
-## 2. Artefato
+## Artefato
 
 **Actions → run → Artifacts → `unydesk-windows-x64`**
 
 Dentro: `rustdesk.exe` (nome interno) + DLLs. A UI mostra **UnyDesk**.
 
-## 3. Se falhar de novo
+## Se falhar
 
-No job **Build Windows x64**, abra o step vermelho e copie as **últimas ~40 linhas** (ou o `::error::`). Com isso dá para ver se foi `vcpkg`, `cargo` ou `flutter build`.
+No job **Build Windows x64**, abra o step vermelho e copie as **últimas ~40 linhas** (ou o `::error::`).
 
-## 4. Servidor
+## Servidor
 
 Network → ID/Relay = host do hbbs, key = `infra/rustdesk-server/data/id_ed25519.pub`, API = `http://<host>:21114`.
