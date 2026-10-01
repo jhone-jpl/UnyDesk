@@ -129,16 +129,22 @@ jobs:
           mkdir -p "${GITHUB_WORKSPACE}/failure-logs"
           exec > >(tee "${GITHUB_WORKSPACE}/failure-logs/linux-apt.log") 2>&1
           sudo apt-get -o DPkg::Lock::Timeout=600 update -y
-          # Required set from RustDesk README (Ubuntu) + va/ssl for hwcodec/vcpkg
-          sudo apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
-            zip yasm make \
+          # The GHA ubuntu-22.04 image ships libunwind-14-dev, which conflicts with
+          # libunwind-dev required by libgstreamer1.0-dev (apt exit 100).
+          sudo apt-get -o DPkg::Lock::Timeout=600 remove -y libunwind-14-dev || true
+          PKGS="zip yasm make \
             clang cmake curl g++ gcc git nasm ninja-build pkg-config wget \
             libgtk-3-dev libclang-dev llvm-dev \
             libasound2-dev libpulse-dev libpam0g-dev \
-            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libunwind-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libxcb-randr0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxdo-dev libxfixes-dev \
-            libva-dev libssl-dev python3 dpkg-dev
+            libva-dev libssl-dev python3 dpkg-dev"
+          if ! sudo apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends $PKGS; then
+            sudo apt-get install -s --no-install-recommends $PKGS 2>&1 | grep -E '^( |E:|Depends|Conflicts|Breaks)' | head -n 30 \
+              | while IFS= read -r line; do echo "::error::apt: ${line}"; done
+            exit 100
+          fi
           # Tray indicator — optional on some images (conflicts); build can proceed without it
           sudo apt-get -o DPkg::Lock::Timeout=600 install -y --no-install-recommends \
             libayatana-appindicator3-dev \
