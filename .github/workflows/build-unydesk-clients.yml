@@ -27,6 +27,7 @@ env:
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
   CLIENT_DIR: unydesk-client
   DEBIAN_FRONTEND: noninteractive
+  CARGO_TERM_COLOR: never
 
 jobs:
   # ─── shared bridge (one job for both platforms) ───────────────────────────
@@ -271,13 +272,14 @@ jobs:
           rc=${PIPESTATUS[0]}
           set -e
           if [ "$rc" -ne 0 ]; then
-            echo "::group::linux-build.log (tail)"
-            tail -n 100 "${GITHUB_WORKSPACE}/failure-logs/linux-build.log" || true
-            echo "::endgroup::"
-            # Surface last lines in annotations (readable without downloading the zip)
-            tail -n 30 "${GITHUB_WORKSPACE}/failure-logs/linux-build.log" | while IFS= read -r line; do
-              echo "::error::${line}"
-            done || true
+            # GitHub keeps only 10 error annotations per step, so pack the relevant
+            # lines into one multi-line annotation (readable via the public API).
+            CLEAN="$(sed -r 's/\x1b\[[0-9;]*[A-Za-z]//g' "${GITHUB_WORKSPACE}/failure-logs/linux-build.log")"
+            MATCHES="$(printf '%s\n' "$CLEAN" | grep -nE 'error(\[|:)|Error:|FAILED|undefined reference|cannot find|not found|No such file|exit status|Exception' | grep -v 'warning' | tail -n 40)"
+            TAIL="$(printf '%s\n' "$CLEAN" | tail -n 60)"
+            msg="$(printf 'MATCHES:\n%s\n\nTAIL:\n%s' "$MATCHES" "$TAIL")"
+            msg="${msg//'%'/'%25'}"; msg="${msg//$'\r'/'%0D'}"; msg="${msg//$'\n'/'%0A'}"
+            echo "::error title=linux-build::${msg}"
             exit "$rc"
           fi
           test -d flutter/build/linux/x64/release/bundle
